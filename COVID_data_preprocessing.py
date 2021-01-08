@@ -7,14 +7,15 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics.regression import mean_squared_error
 
 
-e = 1e-16
-R_ = pd.read_csv("COVID-19-master/COVID-19-master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_recovered_global.csv")
-C_ = pd.read_csv("COVID-19-master/COVID-19-master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv")
-D_ = pd.read_csv("COVID-19-master/COVID-19-master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv")
-N = pd.read_csv("N.csv")
+# Inputting data from CSSE
+e = 1e-16 # 에러 줄이기용
+R_ = pd.read_csv("COVID-19-master/COVID-19-master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_recovered_global.csv") #회복자 수
+C_ = pd.read_csv("COVID-19-master/COVID-19-master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv") #누적 확진자 수
+D_ = pd.read_csv("COVID-19-master/COVID-19-master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv") #누적 사망자 수
+N = pd.read_csv("N.csv") #국가별 인구 수
 
 
-def region_cleaner(df1,df2) :
+def region_cleaner(df1,df2) :   #R, C, D가 모두 있는 나라만 분석에 넣기 위하여 사용한 도구
     Valid_regions = []
     for i in np.arange(df1.shape[0]):
         Valid_regions.append((df1["Province/State"][i], df1["Country/Region"][i]))
@@ -27,7 +28,7 @@ def region_cleaner(df1,df2) :
     df_sliced = df2.take(list(df_indexes_to_keep))
     return df_sliced
 
-
+#나라 이름순으로 정렬
 C = region_cleaner(R_, C_)
 D = region_cleaner(R_, D_)
 R = region_cleaner(C_, R_)
@@ -40,9 +41,9 @@ R = R.sort_values(by=['Country/Region'], ascending = True)
 N = N.sort_values(by=['Province/State'], ascending = True)
 N = N.sort_values(by=['Country/Region'], ascending = True)
 
+#분석에 필요 없는항 지움
 num_dates = C.shape[1]-4
 num_regions = C.shape[0]
-
 N = N.to_numpy()
 x = np.tile(N[:,2], (num_dates,1)).T
 N = x.astype(np.float)
@@ -50,30 +51,34 @@ C = C.to_numpy()
 C = C[:, 4:]
 R = R.to_numpy()
 R = R[:, 4:]
+#I, S 계산
 I = C-R
 S = N-I-R
 
+#국가별 매일매일 beta, gamma 계산
 blank = np.zeros((num_regions, 1))
-S_ = np.hstack((blank, S))
+S_ = np.hstack((blank, S)) #오늘의 S, I, R
 I_ = np.hstack((blank, I))
 R_ = np.hstack((blank, R))
-S__ = np.hstack((S, blank))
+S__ = np.hstack((S, blank)) #하루 전의 S, I, R
 I__ = np.hstack((I, blank))
 R__ = np.hstack((R, blank))
 N__ = np.hstack((N, N[:,1:2]))
 
-B = -(S__-S_)*(N__)/ ((S_+e)*(I_+e)) +e
+B = -(S__-S_)*(N__)/ ((S_+e)*(I_+e)) +e 
 G = (R__ - R_) / (I_+e) +e
 
+#beta를 7일동안의 moving average
 B_smooth = np.zeros((B.shape[0], B.shape[1]+6), dtype = 'float64')
 
 for i in range(7):
     B_smooth[:, i:B.shape[1]+i] = B_smooth[:, i:B.shape[1]+i] + B
 
-B_smooth = B_smooth[:,3:B.shape[1]-3]
+B_smooth = B_smooth[:,3:B.shape[1]-3] 
 B_smooth /= 7.0
 B = B_smooth
 
+#gamma를 15일동안의 moving average
 G_smooth = np.zeros((G.shape[0], G.shape[1]+14), dtype = 'float64')
 for i in range(15):
     G_smooth[:, i:G.shape[1]+i] = G_smooth[:, i:G.shape[1]+i] + G
@@ -81,7 +86,7 @@ G_smooth = G_smooth[:,7:G.shape[1]-7]
 G_smooth /= 15.0
 G = G_smooth
 
-
+#하루하루 미루기 쉽기위해 만든 함수
 def blank_appender(df,x):
     if x!=7 :
         pre = np.tile(blank,x-1)
@@ -98,7 +103,7 @@ def blank_appender(df,x):
         c_ = np.hstack((pre,c))
     return a_, b_, c_
 
-
+#1~7일전 S, I, R값 저장
 S1, I1, R1 = blank_appender((S,I,R),1)
 S2, I2, R2 = blank_appender((S,I,R),2)
 S3, I3, R3 = blank_appender((S,I,R),3)
@@ -110,20 +115,21 @@ training_data = np.hstack((S1,S2,S3,S4,S5,S6,S7, I1,I2,I3,I4,I5,I6,I7, R1,R2-R1,
 
 np.savetxt("training_Data.csv", training_data,delimiter = ',')
 
+#나라 key를 넣으면, 그 국가의 데이터만 분석되도록 함
 def Regionwide(key):
     num_pre = 15
     training_cut = training_data[key].reshape((21, num_dates+6))
     cache = (training_cut[0,0], training_cut[6,-1], training_cut[20,-1])
-    training_cut[0:7] = (training_cut[0:7]-training_cut[6,-1])/(training_cut[0,0]-training_cut[6,-1])
+    training_cut[0:7] = (training_cut[0:7]-training_cut[6,-1])/(training_cut[0,0]-training_cut[6,-1]) #124~126 linear scaling
     training_cut[7:14] = training_cut[7:14]/10000
     training_cut[14:21] = training_cut[14:21]/training_cut[20,-1]
     training_cut = training_cut[:,6+num_pre:-6]
     B_cut = B[key,num_pre:-1]
     G_cut = G[key,num_pre:-1]
 
-    return training_cut.T, B_cut, G_cut, cache
+    return training_cut.T, B_cut, G_cut, cache #그 국가의 트레이닝 데이터와 계산된 beta/gamma를 리턴
 
-
+#linear scaling을 원본으로 돌리는 함수
 def retrieve_original(df_r, cache):
     t0, t6, t20 = cache
     S_0 = df_r[0] * (t0-t6) + t6
@@ -132,6 +138,92 @@ def retrieve_original(df_r, cache):
     return (S_0, I_0, R_0)
 
 
+#training data를 통해서 neural network training
+def training_model(X,y, max_iters = 1000, mode=1): #mode=1은 beta, mode=2는 gamma
+    if mode == 1 :
+        model = MLPRegressor(hidden_layer_sizes=(15, 10, 5), activation='tanh', solver='adam', alpha=0,
+                             learning_rate='invscaling', learning_rate_init=1e-4, verbose=0, tol=1e-6, warm_start=True,
+                             max_iter=1)
+        X_, X_test, y_, y_test = train_test_split(X, y, test_size=0.2, random_state=3213) #training, validation, test data로 나눔
+        X_train, X_val, y_train, y_val = train_test_split(X_, y_, test_size=0.25, random_state=5241)
+
+    if mode == 2 :
+        X = X[8:,:] #smooth때매 앞부분 좀 잘라줌
+        y = y
+        model = MLPRegressor(hidden_layer_sizes=(10,8,6,4,2), activation='tanh', solver='adam', alpha=0,
+                             learning_rate='invscaling', learning_rate_init=3e-5, verbose=0, tol=1e-6, warm_start=True,
+                             max_iter=1)
+        X_, X_test, y_, y_test = train_test_split(X, y, test_size=0.01, random_state=2311)
+        X_train, X_val, y_train, y_val = train_test_split(X_, y_, test_size=0.01, random_state=541515)
+
+    is_overfit = False
+    best_c_val_loss = 2020
+    train_losses = [] #Training_loss가 얼마인지 기록
+    c_val_losses = [] #C-val loss가 얼마인지 기록
+
+    for i in range(max_iters):
+        if i == 1 : tic = time.time()
+        if i == 10 :
+            toc = time.time()
+            print ("Expected remaining time :" + str((round((toc-tic)*max_iters/10.0,2))) + "seconds") # Remaining Time 출력
+
+        model.fit(X_train, y_train) # Forward propagation 1번, Backward propagation 1번
+        train_loss_ = mean_squared_error(y_train, model.predict(X_train))  # Train loss 얼마?
+        c_val_loss = mean_squared_error(y_val, model.predict(X_val))   # C-val loss 얼마?
+        train_losses.append(train_loss_)  # 기록
+        c_val_losses.append(c_val_loss)   # 기록
+        if (i%1000 == 0):
+            print ("Iteration #" + str(i) + " Training loss : "+ str(round(train_loss_,8))  # 얼마인지 눈으로 확인
+                   +", Validation loss : " + str(round(c_val_loss,8)))
+
+        if i > 50 and c_val_loss < best_c_val_loss :  # Cross validation loss가 잘 감소하다가 증가한다면 training 중단
+            model_to_keep = model
+            is_overfit = True
+            best_c_val_loss = c_val_loss
+
+    if not is_overfit :
+        print ("Underfit")
+        model_to_keep = model
+
+    acc = mean_squared_error(y_test, model_to_keep.predict(X_test)) #최종 test loss 계산
+    print (acc)
+    return model_to_keep, train_losses, c_val_losses, i
+
+
+def plot_learning_curve(Loss1, Loss2, num) :   #Learning curve그리는 도구
+    x = list(range(1, num+2))
+    plt.plot(x, Loss1, label="Train loss")
+    plt.plot(x, Loss2, label="C-val loss")
+    plt.xlabel("#Iters")
+    plt.ylabel("Losses")
+    plt.legend()
+    plt.show(10)
+
+
+key_r = 141  #141 korea 106 france 228 US
+df_r, B_r, G_r, cache = Regionwide(key_r) #Regionwide로 각각 저장
+np.savetxt("B.csv",B_r, delimiter = ',')
+np.savetxt("G.csv",G_r,delimiter = ',')
+np.savetxt("df_r.csv",df_r,delimiter = ',')
+
+#모델 트레이닝
+model_B, train_losses, c_val_losses, num_iters = training_model(df_r, B_r, max_iters = 100000, mode = 1)
+#plot_learning_curve (train_losses, c_val_losses, num_iters)
+model_G, train_losses, c_val_losses, num_iters = training_model(df_r, G_r, max_iters = 100000, mode = 2)
+#plot_learning_curve (train_losses, c_val_losses, num_iters)
+
+#beta, gamma예측치 출력
+b = model_B.predict(df_r)
+b = (b+np.absolute(b)) /2.0
+b_pred = np.vstack((B_r, b)).T
+np.savetxt("USA/"+str(key_r)+"B_pred.csv",b_pred, delimiter = ',')
+
+g = model_G.predict(df_r)
+g = (g+np.absolute(g))/2.0
+g_pred = np.vstack((G_r, g[8:])).T
+np.savetxt("USA/"+str(key_r)+"G_pred.csv",g_pred, delimiter = ',')
+
+#총 100일간의 예측 재귀함수
 def predict_future(df_r, model1, model2, cache):
     predicts = np.zeros((3,100))
     today = df_r[-1].reshape(1,-1)
@@ -163,90 +255,6 @@ def predict_future(df_r, model1, model2, cache):
         print (today)
     return predicts
 
-
-
-def training_model(X,y, max_iters = 1000, mode=1):
-    if mode == 1 :
-        model = MLPRegressor(hidden_layer_sizes=(15, 10, 5), activation='tanh', solver='adam', alpha=0,
-                             learning_rate='invscaling', learning_rate_init=1e-4, verbose=0, tol=1e-6, warm_start=True,
-                             max_iter=1)
-        X_, X_test, y_, y_test = train_test_split(X, y, test_size=0.2, random_state=3213)
-        X_train, X_val, y_train, y_val = train_test_split(X_, y_, test_size=0.25, random_state=5241)
-
-    if mode == 2 :
-        X = X[8:,:]
-        y = y
-        model = MLPRegressor(hidden_layer_sizes=(10,8,6,4,2), activation='tanh', solver='adam', alpha=0,
-                             learning_rate='invscaling', learning_rate_init=3e-5, verbose=0, tol=1e-6, warm_start=True,
-                             max_iter=1)
-        X_, X_test, y_, y_test = train_test_split(X, y, test_size=0.01, random_state=2311)
-        X_train, X_val, y_train, y_val = train_test_split(X_, y_, test_size=0.01, random_state=541515)
-
-    is_overfit = False
-    best_c_val_loss = 2020
-    train_losses = []                                                                                   # Training_loss가 얼마인지 기록
-    c_val_losses = []                                                                                   # C-val loss가 얼마인지 기록
-
-    for i in range(max_iters):
-        if i == 1 : tic = time.time()
-        if i == 10 :
-            toc = time.time()
-            print ("Expected remaining time :" + str((round((toc-tic)*max_iters/10.0,2))) + "seconds") # TIME IS GOLD
-
-        model.fit(X_train, y_train)                                              # Forward propagation 1번, Backward propagation 1번
-        train_loss_ = mean_squared_error(y_train, model.predict(X_train))            # Train loss 얼마?
-        c_val_loss = mean_squared_error(y_val, model.predict(X_val))                                       # C-val loss 얼마?
-        train_losses.append(train_loss_)                                                               # 기록
-        c_val_losses.append(c_val_loss)   # 기록
-        if (i%1000 == 0):
-            print ("Iteration #" + str(i) + " Training loss : "+ str(round(train_loss_,8))                 # 얼마인지 확인
-                   +", Validation loss : " + str(round(c_val_loss,8)))
-
-        if i > 50 and c_val_loss < best_c_val_loss :                                                   # Cross validation loss가 잘 감소하다가 증가한다면 training 중단
-            model_to_keep = model
-            is_overfit = True
-            best_c_val_loss = c_val_loss
-
-    if not is_overfit :
-        print ("Underfit")
-        model_to_keep = model
-
-    acc = mean_squared_error(y_test, model_to_keep.predict(X_test))
-    print (acc)
-    return model_to_keep, train_losses, c_val_losses, i
-
-
-def plot_learning_curve(Loss1, Loss2, num) :                                                           # Plot Learning curve
-    x = list(range(1, num+2))
-    plt.plot(x, Loss1, label="Train loss")
-    plt.plot(x, Loss2, label="C-val loss")
-    plt.xlabel("#Iters")
-    plt.ylabel("Losses")
-    plt.legend()
-    plt.show(10)
-
-
-key_r = 206                                           #141 korea 106 france 228 US
-df_r, B_r, G_r, cache = Regionwide(key_r)
-np.savetxt("B.csv",B_r, delimiter = ',')
-np.savetxt("G.csv",G_r,delimiter = ',')
-np.savetxt("df_r.csv",df_r,delimiter = ',')
-
-model_B, train_losses, c_val_losses, num_iters = training_model(df_r, B_r, max_iters = 100000, mode = 1)
-#plot_learning_curve (train_losses, c_val_losses, num_iters)
-model_G, train_losses, c_val_losses, num_iters = training_model(df_r, G_r, max_iters = 100000, mode = 2)
-#plot_learning_curve (train_losses, c_val_losses, num_iters)
-
-
-b = model_B.predict(df_r)
-b = (b+np.absolute(b)) /2.0
-b_pred = np.vstack((B_r, b)).T
-np.savetxt("Japan/"+str(key_r)+"B_pred.csv",b_pred, delimiter = ',')
-
-g = model_G.predict(df_r)
-g = (g+np.absolute(g))/2.0
-g_pred = np.vstack((G_r, g[8:])).T
-
+#최종 100일간의 data 모아서 출력
 predicts = predict_future(df_r, model_B, model_G, cache)
-np.savetxt("Japan/"+str(key_r)+"G_pred.csv",g_pred, delimiter = ',')
-np.savetxt("Japan/"+str(time.time())+str(key_r)+"SIRs.csv",predicts, delimiter = ',')
+np.savetxt("USA/"+str(time.time())+str(key_r)+"SIRs.csv",predicts, delimiter = ',')
